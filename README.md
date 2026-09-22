@@ -1,10 +1,8 @@
 <div align="center">
 
-# ⚡ cursor-agent-mcp
+# cursor-agent-mcp
 
-**El puente entre Claude Code y `cursor-agent`** — worktrees aislados,
-jobs en segundo plano, multi-agente en paralelo, y traer los cambios de
-vuelta a tu repo con `diff` / `bring_changes`.
+**El puente entre Claude Code y `cursor-agent`** — worktrees aislados, jobs en segundo plano, multi-agente en paralelo, y traer los cambios de vuelta a tu repo con `diff` / `bring_changes`.
 
 [![Claude Code](https://img.shields.io/badge/Claude_Code-orquestador-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
 [![cursor-agent](https://img.shields.io/badge/cursor--agent-CLI-000000?logo=cursor&logoColor=white)](https://cursor.com)
@@ -16,13 +14,7 @@ vuelta a tu repo con `diff` / `bring_changes`.
 
 ---
 
-Le da a Claude Code (o cualquier cliente MCP) control total sobre
-`cursor-agent`: crear worktrees de git aislados, lanzar agentes en segundo
-plano, correr varios a la vez, revisar el diff y traer los cambios de vuelta
-a tu repo real — todo sin que Claude tenga que escribir comandos de shell a
-mano ni leer logs enteros.
-
-Es la versión "hecha herramienta" del flujo que ya usaba manualmente:
+Reemplaza este flujo manual:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -32,123 +24,62 @@ cursor-agent -p --trust --force "<plan>" --output-format text
 # ... revisar git diff, y recién ahí traer los cambios ...
 ```
 
-Con este MCP, todo eso son 4-5 llamadas a herramientas, con el trabajo
-pesado (logs largos, texto del prompt) guardado en disco en vez de metido en
-la conversación.
+...por 4-5 llamadas a herramientas MCP. Los logs largos y el texto del plan
+quedan en disco, no metidos en la conversación.
 
 ## Índice
 
-- [Instalación rápida](#instalación-rápida) — copiá y pegá, 5 pasos
-- [¿Por qué existe?](#por-qué-existe)
-- [Requisitos](#requisitos)
-- [Probar que quedó bien](#probar-que-quedó-bien)
-- [El flujo típico](#el-flujo-típico)
-- [Ejemplos reales](#ejemplo-real-una-tarea) (una tarea / multi-agente)
-- [Referencia de herramientas](#referencia-de-herramientas)
-- [Cómo se mantienen bajos los tokens](#cómo-se-mantienen-bajos-los-tokens)
-- [Notas de diseño](#notas-de-diseño--decisiones)
-- [Límites conocidos](#límites-conocidos)
-- [Estructura del proyecto](#estructura-del-proyecto)
+- [Instalación](#instalación)
+- [Por qué existe](#por-qué-existe)
+- [El flujo](#el-flujo)
+- [Ejemplo real](#ejemplo-real)
+- [Herramientas](#herramientas)
+- [Diseño y límites](#diseño-y-límites)
 
-## Instalación rápida
-
-Cinco pasos, de cero a listo (en esta máquina ya está clonado en
-`~/Desktop/mcps/cursor-agent-mcp` — si estás en otra, empezá por el clone):
+## Instalación
 
 ```bash
-# 1. Cloná este repo
 git clone https://github.com/jguevara0923/mcp-cursor.git ~/Desktop/mcps/cursor-agent-mcp
-
-# 2. Instalá el CLI de Cursor, si no lo tenés
-curl https://cursor.com/install -fsS | bash
-
-# 3. Logueate (interactivo, una sola vez — el MCP no puede hacer esto por vos)
-cursor-agent login
-
-# 4. Instalá las dependencias del MCP
+curl https://cursor.com/install -fsS | bash   # si no tenés el CLI de Cursor
+cursor-agent login                            # interactivo, una sola vez
 cd ~/Desktop/mcps/cursor-agent-mcp && npm install
-
-# 5. Registralo en Claude Code
 claude mcp add cursor-agent -- node ~/Desktop/mcps/cursor-agent-mcp/src/server.js
 ```
 
-Confirmá que quedó enchufado:
+Verificar:
 
 ```bash
-claude mcp list          # debería aparecer "cursor-agent"
-node test/smoke-test.mjs # prueba rápida, sin gastar cuota de cursor-agent
+claude mcp list          # debe aparecer "cursor-agent"
+node test/smoke-test.mjs # prueba rápida, no gasta cuota
 ```
 
-Las herramientas van a aparecer en Claude Code como
-`mcp__cursor-agent__<nombre>` (ej. `mcp__cursor-agent__plan_run`). Listo —
-saltá a [El flujo típico](#el-flujo-típico) para el primer uso real (con
-rutas reales de mi setup, no genéricas), o seguí leyendo para el detalle de
-cada paso.
+Las herramientas aparecen como `mcp__cursor-agent__<nombre>` (ej.
+`mcp__cursor-agent__plan_run`).
 
-> `claude mcp add` sin flags queda en tu config de **usuario** (todas tus
-> sesiones de Claude Code lo ven). Si preferís que aplique solo a un proyecto
-> puntual, corré el mismo comando desde ese directorio agregando
-> `--scope project`.
+Para actualizar más adelante: `git pull && npm install` — no hace falta
+volver a registrar el MCP.
 
-### Actualizar a la última versión
+| Requisito | Chequeo |
+|---|---|
+| Node.js ≥ 18.17 | `node --version` |
+| Git ≥ 2.5 | `git --version` |
+| `cursor-agent` logueado | `cursor-agent status` |
 
-Cuando este repo tenga cambios nuevos en GitHub:
+## Por qué existe
 
-```bash
-cd ~/Desktop/mcps/cursor-agent-mcp && git pull && npm install
-```
+- **Aislamiento real**: cursor-agent nunca toca tu working directory — corre en un `git worktree` aparte, con su propia rama.
+- **No bloquea**: lanzar un agente devuelve un `job_id` al toque. Podés lanzar varios en paralelo y seguir trabajando.
+- **Ahorra tokens**: por default solo ves un tail corto del log (~30 líneas). El log completo vive en disco.
+- **Revisar antes de traer**: `diff` muestra qué cambió sin tocar nada; `bring_changes` recién ahí aplica el diff con `git apply` (nunca merge/rebase).
 
-No hace falta volver a correr `claude mcp add` — Claude Code relanza el
-server en cada sesión, así que toma el código actualizado solo.
-
-## ⚡ ¿Por qué existe?
-
-- **Aislamiento real**: cursor-agent nunca toca tu working directory actual.
-  Trabaja en un `git worktree` aparte, con su propia rama.
-- **No bloquea**: lanzar un agente devuelve un `job_id` al toque. Podés
-  lanzar 3, 5, 10 en paralelo (cada uno en su propio worktree) y seguir
-  trabajando mientras corren.
-- **Ahorra tokens**: por default solo ves un resumen corto (últimas ~30
-  líneas de log). El log completo existe en disco y lo pedís explícito
-  (`job_log`) solo si de verdad hace falta.
-- **Revisar antes de traer**: `diff` te muestra qué cambió sin tocar nada;
-  `bring_changes` recién ahí aplica el diff a tu repo real, con `git apply`
-  (nunca merge/rebase — no toca historia).
-
-## Requisitos
-
-| Qué | Versión | Chequeo rápido |
-|---|---|---|
-| Node.js | ≥ 18.17 | `node --version` |
-| Git | ≥ 2.5 (por `git worktree`) | `git --version` |
-| `cursor-agent` CLI | instalado + logueado | `cursor-agent status` |
-
-Si `cursor-agent status` no dice "Logged in", corré `cursor-agent login`
-(interactivo — no lo puede hacer el MCP por vos). La herramienta `check`
-(dentro de Claude Code, una vez instalado) te da este mismo diagnóstico sin
-salir de la conversación.
-
-## Probar que quedó bien
-
-```bash
-node test/smoke-test.mjs   # rápido: lista de tools + check — NO gasta cuota
-node test/e2e-test.mjs     # completo: crea un repo descartable en /tmp,
-                            # corre worktree_create -> run -> diff ->
-                            # bring_changes -> worktree_remove, y limpia todo
-```
-
-Si `cursor-agent` no tiene sesión activa, el paso `run` del segundo test va
-a fallar con "Authentication required" — es esperado (`cursor-agent login`
-lo arregla); el resto igual valida que el server en sí está bien armado.
-
-## El flujo típico
+## El flujo
 
 ```mermaid
 flowchart LR
-    A["🧑‍💻 Vos + Claude Code\narmás el plan"] -->|"plan_run(repo, plan)"| B["⚡ cursor-agent\nComposer, etc."]
-    B -->|"corre en su propio\nworktree + rama"| C["🌿 Worktree aislado\ntu repo NO se toca"]
+    A["Vos + Claude Code\narmás el plan"] -->|"plan_run(repo, plan)"| B["cursor-agent\nComposer, etc."]
+    B -->|"corre en su propio\nworktree + rama"| C["Worktree aislado\ntu repo NO se toca"]
     C -.->|"diff() — revisá qué cambió"| A
-    C -->|"bring_changes()\nrecién ahí se aplica"| D["📁 Tu repo real"]
+    C -->|"bring_changes()\nrecién ahí se aplica"| D["Tu repo real"]
 
     style A fill:#D97757,stroke:#3a3a3a,color:#fff
     style B fill:#111111,stroke:#3a3a3a,color:#fff
@@ -156,281 +87,93 @@ flowchart LR
     style D fill:#2ea44f,stroke:#3a3a3a,color:#fff
 ```
 
-Y la secuencia completa, herramienta por herramienta:
-
-```mermaid
-sequenceDiagram
-    actor Vos as 🧑‍💻 Vos + Claude Code
-    participant MCP as 🔌 cursor-agent-mcp
-    participant CA as ⚡ cursor-agent
-    participant WT as 🌿 Worktree
-    participant Repo as 📁 Tu repo real
-
-    Vos->>MCP: plan_run(repo_path, plan, label)
-    MCP->>WT: git worktree add (rama nueva desde origin/main)
-    MCP->>CA: cursor-agent -p --trust --force "plan"
-    activate CA
-    MCP-->>Vos: { worktree, job: { id, status: "starting" } }
-    Note over Vos,MCP: async — no bloquea, podés lanzar más en paralelo
-    CA-->>WT: lee y edita archivos
-    CA-->>MCP: termina (exit code)
-    deactivate CA
-
-    Vos->>MCP: job_wait(job_id)
-    MCP-->>Vos: status: "done", tail del log
-
-    Vos->>MCP: diff(worktree_path, stat_only: true)
-    MCP-->>Vos: qué archivos cambiaron
-
-    Vos->>MCP: bring_changes(worktree_path, target_repo_path)
-    MCP->>Repo: git apply (working tree, sin merge/rebase)
-
-    Vos->>MCP: worktree_remove(repo_path, worktree_path)
-    MCP->>WT: git worktree remove
-```
-
-### Ejemplo real (una tarea, con mis propias rutas)
-
-> "Dale este plan a Cursor: en `plaxp/backend`, agregar un endpoint
-> `GET /api/reportes/compras/historico-por-producto/resumen` que devuelva la
-> última compra por proveedor de un producto, siguiendo el patrón hexagonal
-> ya usado en `reportes-compras`."
+## Ejemplo real
 
 ```jsonc
-// 1. Lanzar — repo_path es MI repo real, no un placeholder
+// 1. Lanzar (repo_path real, no placeholder)
 plan_run({
   "repo_path": "/Users/joseguevara/Desktop/plaxp/backend",
-  "plan": "Agregar GET /api/reportes/compras/historico-por-producto/resumen ... (plan completo acá)",
+  "plan": "Agregar GET /api/reportes/compras/historico-por-producto/resumen, patrón hexagonal de reportes-compras",
   "label": "historico-compras-resumen"
 })
-// -> { worktree: { worktreePath: "/Users/joseguevara/.cursor-worktrees/backend--cursor-historico-compras-resumen-20260922031500",
-//                   branch: "cursor-historico-compras-resumen-20260922031500" },
+// -> { worktree: { worktreePath: "...", branch: "cursor-historico-compras-resumen-..." },
 //      job: { id: "20260922-031501-a1b2c3", status: "starting" } }
 
 // 2. Esperar
 job_wait({ "job_id": "20260922-031501-a1b2c3" })
-// -> ver el JSON completo del resultado más abajo
+// -> { status: "done", exitCode: 0, tail: "...últimas líneas del log..." }
 
-// 3. Revisar (resumen primero — barato en tokens)
-diff({ "worktree_path": "/Users/joseguevara/.cursor-worktrees/backend--cursor-historico-compras-resumen-20260922031500", "stat_only": true })
-// -> " src/modules/reportes-compras/.../get-historico-compras-por-producto.use-case.ts | 45 +++++++
-//      src/modules/reportes-compras/.../reportes-compras.controller.ts                | 20 +++"
+// 3. Revisar (barato en tokens)
+diff({ "worktree_path": "...", "stat_only": true })
+// -> " .../get-historico-compras-por-producto.use-case.ts | 45 +++++++"
 
-// 4. Traer (si se ve bien)
-bring_changes({
-  "worktree_path": "/Users/joseguevara/.cursor-worktrees/backend--cursor-historico-compras-resumen-20260922031500",
-  "target_repo_path": "/Users/joseguevara/Desktop/plaxp/backend"
-})
+// 4. Traer, si se ve bien
+bring_changes({ "worktree_path": "...", "target_repo_path": "/Users/joseguevara/Desktop/plaxp/backend" })
 
 // 5. Limpiar
-worktree_remove({
-  "repo_path": "/Users/joseguevara/Desktop/plaxp/backend",
-  "worktree_path": "/Users/joseguevara/.cursor-worktrees/backend--cursor-historico-compras-resumen-20260922031500",
-  "delete_branch": "cursor-historico-compras-resumen-20260922031500"
-})
+worktree_remove({ "repo_path": "/Users/joseguevara/Desktop/plaxp/backend", "worktree_path": "...", "delete_branch": "cursor-historico-compras-resumen-..." })
 ```
 
-Lo que devuelve `job_wait` (`meta.json` + tail del log, ya armado por
-`jobSummary`):
-
-```jsonc
-{
-  "id": "20260922-031501-a1b2c3",
-  "label": "historico-compras-resumen",
-  "cwd": "/Users/joseguevara/.cursor-worktrees/backend--cursor-historico-compras-resumen-20260922031500",
-  "branch": "cursor-historico-compras-resumen-20260922031500",
-  "repoPath": "/Users/joseguevara/Desktop/plaxp/backend",
-  "status": "done",                       // starting | running | done | failed | cancelled
-  "exitCode": 0,
-  "startedAt": "2026-09-22T03:15:01.000Z",
-  "endedAt": "2026-09-22T03:16:40.000Z",
-  "durationSeconds": 99,
-  "totalLogLines": 214,                   // el log completo vive en disco — pedilo con job_log si hace falta
-  "tail": "...últimas ~30 líneas del log, no las 214..."
-}
-```
-
-### Ejemplo real (multi-agente, tareas independientes en paralelo)
-
-> "Necesito que en paralelo, en `plaxp/frontend`: (A) arreglés que el
-> selector de producto del reporte de histórico de compras no deje buscar
-> otro sin perder la selección actual, y (B) agregués un gráfico de barras
-> al reporte de Comparativo de Costos — son cosas que no se tocan entre sí."
+**Multi-agente** (tareas independientes en paralelo, cada una en su propio worktree — nunca se pisan):
 
 ```jsonc
 plan_run_parallel({
   "tasks": [
-    { "repo_path": "/Users/joseguevara/Desktop/plaxp/frontend", "label": "fix-producto-autocomplete",
-      "plan": "En ProductoAutocomplete.tsx, buscar otro producto no debe borrar el actual hasta confirmar uno nuevo... (plan completo)" },
-    { "repo_path": "/Users/joseguevara/Desktop/plaxp/frontend", "label": "chart-comparativo-costos",
-      "plan": "Agregar un ChartCard con BarChart a ComparativoCostosReport.tsx, mismo patrón que ComprasPorProveedorReport... (plan completo)" }
+    { "repo_path": "/Users/joseguevara/Desktop/plaxp/frontend", "label": "fix-producto-autocomplete", "plan": "..." },
+    { "repo_path": "/Users/joseguevara/Desktop/plaxp/frontend", "label": "chart-comparativo-costos", "plan": "..." }
   ]
 })
-// -> { launched: 2, results: [
-//      { label: "fix-producto-autocomplete", worktree: {...}, job: { id: "...", status: "starting" } },
-//      { label: "chart-comparativo-costos", worktree: {...}, job: { id: "...", status: "starting" } }
-//    ]}
+// -> { launched: 2, results: [{ label, worktree, job }, { label, worktree, job }] }
 ```
 
-Cada tarea corre en SU PROPIO worktree/rama — nunca se pisan entre sí, ni con
-tu working directory real, aunque toquen el mismo repo (acá, las dos tocan
-`plaxp/frontend` al mismo tiempo sin chocar). Después seguís cada una con
-`job_status`/`job_wait` + `diff` + `bring_changes` por separado.
+## Herramientas
 
-## Referencia de herramientas
-
-Llamá `help` en cualquier momento para un cheatsheet corto sin salir de la
-conversación. Acá el detalle:
-
-### Diagnóstico
+Llamá `help` para un cheatsheet corto sin salir de la conversación.
 
 | Herramienta | Qué hace |
 |---|---|
-| `check` | ¿Está `cursor-agent` instalado? ¿Qué versión? ¿Hay sesión logueada? Corré esto primero si algo falla. |
-| `list_models` | Lista los modelos disponibles para el parámetro `model` (gpt-5, sonnet-4-thinking, etc.). |
+| `check` | Diagnóstico: cursor-agent instalado, versión, sesión logueada. |
+| `list_models` | Modelos disponibles para `model`. |
+| `worktree_create` | Worktree + rama nueva desde `base` (default `origin/main`). Symlinkea `node_modules`. |
+| `worktree_list` / `worktree_remove` | Listar / borrar worktrees. |
+| `run` | Primitivo: corre cursor-agent en un `cwd`. Async por default. |
+| `plan_run` | `worktree_create` + `run` en un paso — el que usás normalmente. |
+| `plan_run_parallel` | `plan_run` varias veces a la vez, un worktree por tarea. |
+| `job_status` | Estado + tail corto del log. |
+| `job_wait` | Bloquea hasta que el job termine. |
+| `job_log` | Log completo, paginado — solo si `job_status` no alcanza. |
+| `job_list` / `job_cancel` | Listar jobs / matar uno que sigue corriendo. |
+| `diff` | Qué cambió en el worktree (`stat_only:true` = solo resumen). |
+| `bring_changes` | Aplica el diff a tu repo real con `git apply`. No comitea. |
+| `help` | Cheatsheet de todo esto. |
 
-### Worktrees (aislamiento)
+Parámetros más usados de `run` / `plan_run` / `plan_run_parallel`: `plan` o
+`plan_file` (mejor para planes largos), `model`, `mode` (`agent` lee y
+escribe; `plan`/`ask` son solo lectura), `wait` (default `false` — async),
+`label`.
 
-| Herramienta | Qué hace |
-|---|---|
-| `worktree_create` | Crea un worktree + rama nueva. Hace `git fetch` del remoto de `base` primero. Symlinkea `node_modules` si existe (no reinstala nada). |
-| `worktree_list` | Lista los worktrees activos de un repo. |
-| `worktree_remove` | Borra un worktree (y opcionalmente su rama). |
+## Diseño y límites
 
-Parámetros clave de `worktree_create`:
-- `repo_path` (obligatorio) — el repo git.
-- `branch` (obligatorio) — nombre de la rama nueva.
-- `base` (default `origin/main`) — punto de partida.
-- `worktree_path` (opcional) — default `~/.cursor-worktrees/<repo>--<rama>`.
-- `link_node_modules` (default `true`).
+- Los argumentos de `cursor-agent`/`git` van siempre como array a `spawn()`, nunca como string armado a mano — el plan puede traer comillas o `$` sin riesgo.
+- El entorno pasa una vez por una shell de login (cacheado) para heredar `PATH`/variables de `~/.zshrc`.
+- `bring_changes` usa `git apply`, nunca merge/rebase. Si el patch no aplica limpio, no toca nada.
+- `cursor-agent` tiene worktrees nativos (`-w`/`--worktree-base`); este MCP usa los suyos propios para controlar el `base`, la ruta y el symlink de `node_modules`.
+- `job_cancel` solo funciona en la sesión del server que lanzó ese job (el proceso vive en memoria, no en disco).
+- Sin límite propio de jobs concurrentes — usá criterio con tu cuota de Cursor.
+- `.jobs/` crece con cada corrida; borrala entera si se hace grande (no afecta jobs en curso).
 
-### Ejecutar cursor-agent
-
-| Herramienta | Qué hace |
-|---|---|
-| `run` | Primitivo de bajo nivel: corre cursor-agent en un `cwd` dado. Async por default. |
-| `plan_run` | **El que usás normalmente**: `worktree_create` + `run` en un solo paso. |
-| `plan_run_parallel` | `plan_run` varias veces a la vez — un worktree/job por tarea. |
-
-Parámetros compartidos por los tres (todos con default sensato):
-
-| Parámetro | Default | Qué es |
-|---|---|---|
-| `prompt` / `plan` | — | El texto del plan. Para planes largos, mejor `plan_file` (ruta a un .txt/.md) — así no metés un string gigante en la llamada. |
-| `plan_file` | — | Alternativa a `prompt`/`plan`: leer el plan de un archivo. |
-| `model` | el default de cursor-agent | Qué modelo usar (`list_models` para ver opciones). |
-| `mode` | `"agent"` | `"agent"` lee y escribe. `"plan"`/`"ask"` son de **SOLO LECTURA** — para pedirle un análisis o un plan sin riesgo de que toque archivos. |
-| `trust` | `true` | Agrega `--trust` (necesario para no confirmar cada acción). |
-| `force` | `true` | Agrega `--force` (correr todo sin preguntar). |
-| `wait` | `false` | `false` = devuelve `job_id` al toque y sigue en segundo plano. `true` = bloquea hasta terminar. |
-| `timeout_seconds` | `1800` | Solo si `wait:true` — cuánto esperar como máximo. |
-| `label` | — | Nombre legible para identificarlo después en `job_list`. |
-
-Solo en `run` (para continuar una sesión ya existente en un worktree que
-seguís usando):
-
-| Parámetro | Qué es |
-|---|---|
-| `resume_chat_id` | Continuar una sesión específica (`--resume <id>`). |
-| `continue_session` | Continuar la última sesión en ese `cwd` (`--continue`). |
-
-### Seguir un job
-
-| Herramienta | Qué hace |
-|---|---|
-| `job_status` | Estado + tail corto del log (rápido, barato en tokens). |
-| `job_wait` | Bloquea hasta que termine (o timeout) y devuelve el resultado. |
-| `job_log` | Log completo, **paginado por líneas** — solo cuando `job_status` no alcanza. |
-| `job_list` | Lista jobs (nuevo primero), filtrable por `repo_path`/`status`. |
-| `job_cancel` | Mata un job que sigue corriendo (solo si lo lanzó ESTA sesión del server). |
-
-Los jobs quedan guardados en `.jobs/<id>/{meta.json,output.log}` dentro de
-esta carpeta — sobreviven un reinicio del server MCP (podés preguntar por un
-job de ayer con `job_status`), pero `job_cancel` solo funciona mientras el
-proceso que lo lanzó sigue vivo.
-
-### Revisar y traer los cambios
-
-| Herramienta | Qué hace |
-|---|---|
-| `diff` | Diff de lo que cambió en el worktree (incluye archivos nuevos). `stat_only:true` para solo el resumen — más barato en tokens. |
-| `bring_changes` | Aplica ese diff a tu repo real con `git apply`. Nunca toca historia (no es merge/rebase). Si algo no aplica limpio, no rompe nada y te devuelve el error de git tal cual. |
-
-`bring_changes` no comitea por vos — deja los cambios en el working tree
-(o en el índice, si pasás `stage:true`). Comitear queda en tus manos, a
-propósito.
-
-## 🪙 Cómo se mantienen bajos los tokens
-
-1. **Todo async por default.** `run`/`plan_run`/`plan_run_parallel` devuelven
-   un `job_id` al toque — el texto largo del prompt y el log entero NUNCA
-   viajan de vuelta en la respuesta salvo que los pidas.
-2. **`job_status` da un tail chico** (30 líneas por default), no el log
-   entero. `job_log` (el completo, paginado) es un paso aparte, explícito.
-3. **`diff` con `stat_only:true`** te da el resumen (archivos + líneas)
-   antes de pedir el diff línea por línea completo.
-4. **`plan_file` en vez de `prompt`** para planes largos — el archivo vive
-   en disco, no en la conversación.
-5. **`help` es un cheatsheet de una sola llamada** en vez de tener que leer
-   este README entero cada vez que te olvidás un parámetro.
-
-## Notas de diseño / decisiones
-
-- **Sin shell para armar comandos**: los argumentos de `cursor-agent` y
-  `git` se pasan siempre como array a `spawn(...)`, nunca como un string
-  armado a mano — así el texto del plan puede traer comillas, backticks,
-  `$`, lo que sea, sin riesgo de que se interprete como shell.
-- **El entorno SÍ pasa por una shell de login** (`$SHELL -lc 'env -0'`),
-  una sola vez, cacheado — para heredar `PATH` (`~/.local/bin`) y cualquier
-  variable que vivan en tu `~/.zshrc`/`~/.zprofile`. Eso es lo único que usa
-  shell; los comandos en sí, no.
-- **`bring_changes` usa `git apply`, nunca `git merge`/`rebase`**: no toca
-  ramas ni historia del repo destino, solo el working tree (y el índice si
-  pedís `stage:true`). Si el patch no aplica limpio, no se aplica nada — no
-  hay un estado a medias que limpiar.
-- **`diffWorktree`/`bring_changes` usan `git add -N` (intent-to-add)** antes
-  del diff, para que los archivos NUEVOS también aparezcan — sin eso,
-  `git diff` solo muestra cambios a archivos ya trackeados. `-N` no
-  stagea contenido, solo hace que el archivo entre al diff.
-- **`cursor-agent` también tiene worktrees nativos** (`-w`/`--worktree`,
-  `--worktree-base`) que crean el worktree en
-  `~/.cursor/worktrees/<repo>/<nombre>`. Este MCP usa SU PROPIO manejo de
-  worktrees en vez de esa flag porque necesita: elegir el `base` exacto
-  (`origin/main` recién fetcheado), elegir la ruta, symlinkear
-  `node_modules`, y poder listar/borrar worktrees de forma pareja sin
-  depender de dónde los puso cursor-agent. Si algún día conviene simplificar
-  usando la flag nativa, es una opción — documentado acá para que quede
-  claro que fue decisión, no que no se sabía que existía.
-
-## Límites conocidos
-
-- `job_cancel` solo funciona en la sesión del server que lanzó ese job (el
-  handle del proceso vive en memoria, no en disco). Si reiniciás Claude
-  Code / el MCP y un job sigue corriendo, podés verlo con `job_status` pero
-  no matarlo desde acá — hacelo a mano con el `pid` que te muestra.
-- No hay límite de jobs concurrentes propio — si lanzás 50 en paralelo,
-  corren 50 procesos de `cursor-agent` a la vez. Usá tu criterio (y fijate
-  la cuota de tu plan de Cursor).
-- `.jobs/` crece con el tiempo (un `meta.json` + `output.log` por corrida).
-  No hay limpieza automática todavía — borrá la carpeta entera si se hace
-  muy grande (no afecta nada en curso, los jobs activos siguen en memoria
-  del proceso del server mientras corren).
-
-## Estructura del proyecto
+## Estructura
 
 ```
 cursor-agent-mcp/
-  package.json
-  README.md
-  .gitignore
   src/
-    server.js          # registro de todas las herramientas MCP
-    cursorRunner.js     # arma los args y lanza cursor-agent, escribe el log
-    jobs.js             # persistencia de jobs en .jobs/<id>/
-    worktree.js          # git worktree add/remove/list + diff + bring_changes
-    util.js              # entorno de shell cacheado, helpers de texto
+    server.js          # registro de herramientas MCP
+    cursorRunner.js     # arma args y lanza cursor-agent
+    jobs.js             # persistencia en .jobs/<id>/
+    worktree.js          # worktree add/remove/list + diff + bring_changes
+    util.js              # shell env cacheado, helpers
   test/
-    smoke-test.mjs       # prueba rápida: lista de tools + check (no gasta cuota)
-    e2e-test.mjs          # flujo completo contra un repo descartable en /tmp
-  .jobs/                  # (se crea solo) logs y metadata de cada corrida
+    smoke-test.mjs       # sin gastar cuota
+    e2e-test.mjs          # flujo completo en repo descartable
+  .jobs/                  # (se crea solo) logs y metadata
 ```

@@ -1,0 +1,22 @@
+{
+  "name": "cursor-agent-mcp",
+  "version": "1.0.0",
+  "description": "MCP server para orquestar cursor-agent (worktrees aislados, jobs en segundo plano, multi-agente, diff/merge de vuelta al repo) desde Claude Code.",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "cursor-agent-mcp": "./src/server.js"
+  },
+  "main": "./src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.1"
+  },
+  "engines": {
+    "node": ">=18.17"
+  }
+}

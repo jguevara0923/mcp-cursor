@@ -30,7 +30,7 @@ la conversación.
 
 ## Índice
 
-- [Instalación rápida](#instalación-rápida) — copiá y pegá, 4 pasos
+- [Instalación rápida](#instalación-rápida) — copiá y pegá, 5 pasos
 - [¿Por qué existe?](#por-qué-existe)
 - [Requisitos](#requisitos)
 - [Probar que quedó bien](#probar-que-quedó-bien)
@@ -44,19 +44,23 @@ la conversación.
 
 ## Instalación rápida
 
-Cuatro pasos, de cero a listo:
+Cinco pasos, de cero a listo (en esta máquina ya está clonado en
+`~/Desktop/mcps/cursor-agent-mcp` — si estás en otra, empezá por el clone):
 
 ```bash
-# 1. Instalá el CLI de Cursor, si no lo tenés
+# 1. Cloná este repo
+git clone https://github.com/jguevara0923/mcp-cursor.git ~/Desktop/mcps/cursor-agent-mcp
+
+# 2. Instalá el CLI de Cursor, si no lo tenés
 curl https://cursor.com/install -fsS | bash
 
-# 2. Logueate (interactivo, una sola vez — el MCP no puede hacer esto por vos)
+# 3. Logueate (interactivo, una sola vez — el MCP no puede hacer esto por vos)
 cursor-agent login
 
-# 3. Instalá las dependencias del MCP
+# 4. Instalá las dependencias del MCP
 cd ~/Desktop/mcps/cursor-agent-mcp && npm install
 
-# 4. Registralo en Claude Code
+# 5. Registralo en Claude Code
 claude mcp add cursor-agent -- node ~/Desktop/mcps/cursor-agent-mcp/src/server.js
 ```
 
@@ -69,15 +73,27 @@ node test/smoke-test.mjs # prueba rápida, sin gastar cuota de cursor-agent
 
 Las herramientas van a aparecer en Claude Code como
 `mcp__cursor-agent__<nombre>` (ej. `mcp__cursor-agent__plan_run`). Listo —
-saltá a [El flujo típico](#el-flujo-típico) para el primer uso real, o seguí
-leyendo para el detalle de cada paso.
+saltá a [El flujo típico](#el-flujo-típico) para el primer uso real (con
+rutas reales de mi setup, no genéricas), o seguí leyendo para el detalle de
+cada paso.
 
 > `claude mcp add` sin flags queda en tu config de **usuario** (todas tus
 > sesiones de Claude Code lo ven). Si preferís que aplique solo a un proyecto
 > puntual, corré el mismo comando desde ese directorio agregando
 > `--scope project`.
 
-## ¿Por qué existe?
+### Actualizar a la última versión
+
+Cuando este repo tenga cambios nuevos en GitHub:
+
+```bash
+cd ~/Desktop/mcps/cursor-agent-mcp && git pull && npm install
+```
+
+No hace falta volver a correr `claude mcp add` — Claude Code relanza el
+server en cada sesión, así que toma el código actualizado solo.
+
+## ⚡ ¿Por qué existe?
 
 - **Aislamiento real**: cursor-agent nunca toca tu working directory actual.
   Trabaja en un `git worktree` aparte, con su propia rama.
@@ -120,6 +136,19 @@ lo arregla); el resto igual valida que el server en sí está bien armado.
 ## El flujo típico
 
 ```
+┌──────────────────────┐   plan_run(repo_path, plan)   ┌───────────────────┐   corre en su propio    ┌────────────────────────┐
+│  Vos + Claude Code    │ ─────────────────────────────▶│    cursor-agent    │──────────────────────▶ │   Worktree aislado      │
+│  armás el plan acá    │                               │  (Composer, etc.)  │   worktree + rama       │  (tu repo NO se toca)   │
+└──────────────────────┘                                └───────────────────┘                         └────────────────────────┘
+           ▲                                                                                                       │
+           │                     diff({worktree_path})  →  revisá qué cambió, sin tocar nada                       │
+           └───────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                             bring_changes({worktree_path, target_repo_path})  →  RECIÉN ahí se aplica a tu repo real
+```
+
+Paso a paso, con las herramientas:
+
+```
 plan_run({ repo_path, plan, label })
         │
         ├─▶ crea worktree + rama nueva (git worktree add ... origin/main)
@@ -141,67 +170,93 @@ bring_changes({ worktree_path, target_repo_path })   # aplicar a tu repo real
 worktree_remove({ repo_path, worktree_path, delete_branch: "<rama>" })  # limpiar
 ```
 
-### Ejemplo real (una tarea)
+### Ejemplo real (una tarea, con mis propias rutas)
 
-> "Dale este plan a Cursor: agregar un endpoint `GET /api/x` que devuelva
-> tal cosa, siguiendo el patrón de `y`."
+> "Dale este plan a Cursor: en `plaxp/backend`, agregar un endpoint
+> `GET /api/reportes/compras/historico-por-producto/resumen` que devuelva la
+> última compra por proveedor de un producto, siguiendo el patrón hexagonal
+> ya usado en `reportes-compras`."
 
 ```jsonc
-// 1. Lanzar
+// 1. Lanzar — repo_path es MI repo real, no un placeholder
 plan_run({
-  "repo_path": "/Users/vos/proyecto/backend",
-  "plan": "Agregar GET /api/x ... (plan completo acá)",
-  "label": "endpoint-x"
+  "repo_path": "/Users/joseguevara/Desktop/plaxp/backend",
+  "plan": "Agregar GET /api/reportes/compras/historico-por-producto/resumen ... (plan completo acá)",
+  "label": "historico-compras-resumen"
 })
-// -> { worktree: { worktreePath: "~/.cursor-worktrees/backend--cursor-endpoint-x-...", branch: "cursor-endpoint-x-..." },
-//      job: { id: "20260922-...", status: "starting" } }
+// -> { worktree: { worktreePath: "/Users/joseguevara/.cursor-worktrees/backend--cursor-historico-compras-resumen-20260922031500",
+//                   branch: "cursor-historico-compras-resumen-20260922031500" },
+//      job: { id: "20260922-031501-a1b2c3", status: "starting" } }
 
 // 2. Esperar
-job_wait({ "job_id": "20260922-..." })
-// -> { status: "done", exitCode: 0, tail: "...últimas líneas..." }
+job_wait({ "job_id": "20260922-031501-a1b2c3" })
+// -> ver el JSON completo del resultado más abajo
 
-// 3. Revisar
-diff({ "worktree_path": "~/.cursor-worktrees/backend--cursor-endpoint-x-...", "stat_only": true })
-// -> " src/modules/x/x.controller.ts | 12 +++++++++++"
+// 3. Revisar (resumen primero — barato en tokens)
+diff({ "worktree_path": "/Users/joseguevara/.cursor-worktrees/backend--cursor-historico-compras-resumen-20260922031500", "stat_only": true })
+// -> " src/modules/reportes-compras/.../get-historico-compras-por-producto.use-case.ts | 45 +++++++
+//      src/modules/reportes-compras/.../reportes-compras.controller.ts                | 20 +++"
 
 // 4. Traer (si se ve bien)
 bring_changes({
-  "worktree_path": "~/.cursor-worktrees/backend--cursor-endpoint-x-...",
-  "target_repo_path": "/Users/vos/proyecto/backend"
+  "worktree_path": "/Users/joseguevara/.cursor-worktrees/backend--cursor-historico-compras-resumen-20260922031500",
+  "target_repo_path": "/Users/joseguevara/Desktop/plaxp/backend"
 })
 
 // 5. Limpiar
 worktree_remove({
-  "repo_path": "/Users/vos/proyecto/backend",
-  "worktree_path": "~/.cursor-worktrees/backend--cursor-endpoint-x-...",
-  "delete_branch": "cursor-endpoint-x-..."
+  "repo_path": "/Users/joseguevara/Desktop/plaxp/backend",
+  "worktree_path": "/Users/joseguevara/.cursor-worktrees/backend--cursor-historico-compras-resumen-20260922031500",
+  "delete_branch": "cursor-historico-compras-resumen-20260922031500"
 })
+```
+
+Lo que devuelve `job_wait` (`meta.json` + tail del log, ya armado por
+`jobSummary`):
+
+```jsonc
+{
+  "id": "20260922-031501-a1b2c3",
+  "label": "historico-compras-resumen",
+  "cwd": "/Users/joseguevara/.cursor-worktrees/backend--cursor-historico-compras-resumen-20260922031500",
+  "branch": "cursor-historico-compras-resumen-20260922031500",
+  "repoPath": "/Users/joseguevara/Desktop/plaxp/backend",
+  "status": "done",                       // starting | running | done | failed | cancelled
+  "exitCode": 0,
+  "startedAt": "2026-09-22T03:15:01.000Z",
+  "endedAt": "2026-09-22T03:16:40.000Z",
+  "durationSeconds": 99,
+  "totalLogLines": 214,                   // el log completo vive en disco — pedilo con job_log si hace falta
+  "tail": "...últimas ~30 líneas del log, no las 214..."
+}
 ```
 
 ### Ejemplo real (multi-agente, tareas independientes en paralelo)
 
-> "Necesito que en paralelo: (A) arreglés el bug del carrito y (B) agregués
-> el filtro de fecha al reporte de ventas — son cosas que no se tocan entre
-> sí."
+> "Necesito que en paralelo, en `plaxp/frontend`: (A) arreglés que el
+> selector de producto del reporte de histórico de compras no deje buscar
+> otro sin perder la selección actual, y (B) agregués un gráfico de barras
+> al reporte de Comparativo de Costos — son cosas que no se tocan entre sí."
 
 ```jsonc
 plan_run_parallel({
   "tasks": [
-    { "repo_path": "/Users/vos/proyecto/frontend", "label": "fix-carrito",
-      "plan": "El carrito duplica líneas cuando... (plan completo)" },
-    { "repo_path": "/Users/vos/proyecto/frontend", "label": "filtro-fecha-reporte",
-      "plan": "Agregar filtro de fecha a ReporteVentas... (plan completo)" }
+    { "repo_path": "/Users/joseguevara/Desktop/plaxp/frontend", "label": "fix-producto-autocomplete",
+      "plan": "En ProductoAutocomplete.tsx, buscar otro producto no debe borrar el actual hasta confirmar uno nuevo... (plan completo)" },
+    { "repo_path": "/Users/joseguevara/Desktop/plaxp/frontend", "label": "chart-comparativo-costos",
+      "plan": "Agregar un ChartCard con BarChart a ComparativoCostosReport.tsx, mismo patrón que ComprasPorProveedorReport... (plan completo)" }
   ]
 })
 // -> { launched: 2, results: [
-//      { label: "fix-carrito", worktree: {...}, job: { id: "...", status: "starting" } },
-//      { label: "filtro-fecha-reporte", worktree: {...}, job: { id: "...", status: "starting" } }
+//      { label: "fix-producto-autocomplete", worktree: {...}, job: { id: "...", status: "starting" } },
+//      { label: "chart-comparativo-costos", worktree: {...}, job: { id: "...", status: "starting" } }
 //    ]}
 ```
 
 Cada tarea corre en SU PROPIO worktree/rama — nunca se pisan entre sí, ni con
-tu working directory real, aunque toquen el mismo repo. Después seguís cada
-una con `job_status`/`job_wait` + `diff` + `bring_changes` por separado.
+tu working directory real, aunque toquen el mismo repo (acá, las dos tocan
+`plaxp/frontend` al mismo tiempo sin chocar). Después seguís cada una con
+`job_status`/`job_wait` + `diff` + `bring_changes` por separado.
 
 ## Referencia de herramientas
 
@@ -286,7 +341,7 @@ proceso que lo lanzó sigue vivo.
 (o en el índice, si pasás `stage:true`). Comitear queda en tus manos, a
 propósito.
 
-## Cómo se mantienen bajos los tokens
+## 🪙 Cómo se mantienen bajos los tokens
 
 1. **Todo async por default.** `run`/`plan_run`/`plan_run_parallel` devuelven
    un `job_id` al toque — el texto largo del prompt y el log entero NUNCA

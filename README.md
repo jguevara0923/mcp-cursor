@@ -1,10 +1,18 @@
-# cursor-agent-mcp
+<div align="center">
 
-**MCP server para orquestar `cursor-agent` desde Claude Code** — worktrees
-aislados, jobs en segundo plano, multi-agente en paralelo, y traer los
-cambios de vuelta a tu repo con `diff`/`bring_changes`.
+# ⚡ cursor-agent-mcp
 
-Node ≥ 18.17 · sin dependencias raras (`@modelcontextprotocol/sdk` + `zod`) · MIT-para-vos (uso personal)
+**El puente entre Claude Code y `cursor-agent`** — worktrees aislados,
+jobs en segundo plano, multi-agente en paralelo, y traer los cambios de
+vuelta a tu repo con `diff` / `bring_changes`.
+
+[![Claude Code](https://img.shields.io/badge/Claude_Code-orquestador-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
+[![cursor-agent](https://img.shields.io/badge/cursor--agent-CLI-000000?logo=cursor&logoColor=white)](https://cursor.com)
+[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A518.17-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org)
+[![MCP](https://img.shields.io/badge/MCP-stdio-6a48bf?logo=modelcontextprotocol&logoColor=white)](https://modelcontextprotocol.io)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+</div>
 
 ---
 
@@ -135,39 +143,50 @@ lo arregla); el resto igual valida que el server en sí está bien armado.
 
 ## El flujo típico
 
-```
-┌──────────────────────┐   plan_run(repo_path, plan)   ┌───────────────────┐   corre en su propio    ┌────────────────────────┐
-│  Vos + Claude Code    │ ─────────────────────────────▶│    cursor-agent    │──────────────────────▶ │   Worktree aislado      │
-│  armás el plan acá    │                               │  (Composer, etc.)  │   worktree + rama       │  (tu repo NO se toca)   │
-└──────────────────────┘                                └───────────────────┘                         └────────────────────────┘
-           ▲                                                                                                       │
-           │                     diff({worktree_path})  →  revisá qué cambió, sin tocar nada                       │
-           └───────────────────────────────────────────────────────────────────────────────────────────────────────┘
-                             bring_changes({worktree_path, target_repo_path})  →  RECIÉN ahí se aplica a tu repo real
+```mermaid
+flowchart LR
+    A["🧑‍💻 Vos + Claude Code\narmás el plan"] -->|"plan_run(repo, plan)"| B["⚡ cursor-agent\nComposer, etc."]
+    B -->|"corre en su propio\nworktree + rama"| C["🌿 Worktree aislado\ntu repo NO se toca"]
+    C -.->|"diff() — revisá qué cambió"| A
+    C -->|"bring_changes()\nrecién ahí se aplica"| D["📁 Tu repo real"]
+
+    style A fill:#D97757,stroke:#3a3a3a,color:#fff
+    style B fill:#111111,stroke:#3a3a3a,color:#fff
+    style C fill:#6a48bf,stroke:#3a3a3a,color:#fff
+    style D fill:#2ea44f,stroke:#3a3a3a,color:#fff
 ```
 
-Paso a paso, con las herramientas:
+Y la secuencia completa, herramienta por herramienta:
 
-```
-plan_run({ repo_path, plan, label })
-        │
-        ├─▶ crea worktree + rama nueva (git worktree add ... origin/main)
-        └─▶ lanza cursor-agent en ese worktree, en segundo plano
-        │
-        ▼
-   { worktree: {...}, job: { id, status: "running", ... } }
+```mermaid
+sequenceDiagram
+    actor Vos as 🧑‍💻 Vos + Claude Code
+    participant MCP as 🔌 cursor-agent-mcp
+    participant CA as ⚡ cursor-agent
+    participant WT as 🌿 Worktree
+    participant Repo as 📁 Tu repo real
 
-job_wait({ job_id })                       # esperar a que termine
-        │
-        ▼
-diff({ worktree_path, stat_only: true })   # ver QUÉ cambió, resumido
-diff({ worktree_path })                    # ver el diff completo si hace falta
-        │
-        ▼
-bring_changes({ worktree_path, target_repo_path })   # aplicar a tu repo real
-        │
-        ▼
-worktree_remove({ repo_path, worktree_path, delete_branch: "<rama>" })  # limpiar
+    Vos->>MCP: plan_run(repo_path, plan, label)
+    MCP->>WT: git worktree add (rama nueva desde origin/main)
+    MCP->>CA: cursor-agent -p --trust --force "plan"
+    activate CA
+    MCP-->>Vos: { worktree, job: { id, status: "starting" } }
+    Note over Vos,MCP: async — no bloquea, podés lanzar más en paralelo
+    CA-->>WT: lee y edita archivos
+    CA-->>MCP: termina (exit code)
+    deactivate CA
+
+    Vos->>MCP: job_wait(job_id)
+    MCP-->>Vos: status: "done", tail del log
+
+    Vos->>MCP: diff(worktree_path, stat_only: true)
+    MCP-->>Vos: qué archivos cambiaron
+
+    Vos->>MCP: bring_changes(worktree_path, target_repo_path)
+    MCP->>Repo: git apply (working tree, sin merge/rebase)
+
+    Vos->>MCP: worktree_remove(repo_path, worktree_path)
+    MCP->>WT: git worktree remove
 ```
 
 ### Ejemplo real (una tarea, con mis propias rutas)
